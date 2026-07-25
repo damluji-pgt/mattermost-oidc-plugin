@@ -61,16 +61,26 @@ const OIDCLoginButton = () => {
         const returnTo = new URLSearchParams(window.location.search).get('redirect_to') || '/';
         const base = `/plugins/${PLUGIN_ID}/oauth2/connect?return_to=${encodeURIComponent(returnTo)}`;
 
-        // Open the flow in a popup. The Mattermost Desktop app hard-blocks the main
-        // window from navigating to the external identity provider (nothing happens on
-        // click), but renders a plugin-URL popup in a trusted, session-sharing window
-        // that *does* allow it. The `popup=1` flag makes the callback close the popup
-        // and hand control back here instead of issuing a plain redirect.
+        // The popup is only needed inside the Mattermost Desktop app (Electron): it
+        // hard-blocks the main window from navigating to the external identity provider
+        // (nothing happens on click), but renders a plugin-URL popup in a trusted,
+        // session-sharing window that *does* allow it.
+        const ua = window.navigator.userAgent;
+        const isDesktopApp = ua.indexOf('Mattermost') !== -1 && ua.indexOf('Electron') !== -1;
+
+        if (!isDesktopApp) {
+            // Regular browser: a plain full-page navigation works fine -> no popup
+            window.location.href = base;
+            return;
+        }
+
+        // Desktop app: open the flow in a popup. The `popup=1` flag makes the callback
+        // close the popup and hand control back here instead of issuing a plain redirect.
         const popup = window.open(`${base}&popup=1`, 'oidc_login', 'width=520,height=680');
         if (!popup) {
-            // Popup blocked (strict browser settings): fall back to full-page navigation.
-            // Without popup=1 the callback performs a normal server-side redirect — this
-            // works in a regular browser, just not inside the Desktop app.
+            // Popup blocked: fall back to full-page navigation. This won't complete the
+            // login inside the Desktop app (external nav is blocked), but it's the only
+            // remaining option and potentially avoids a silent no-op on click.
             window.location.href = base;
         }
     };
