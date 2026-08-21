@@ -18,6 +18,7 @@ type Configuration struct {
 	EmailClaim         string `json:"EmailClaim"`
 	FirstNameClaim     string `json:"FirstNameClaim"`
 	LastNameClaim      string `json:"LastNameClaim"`
+	PositionClaim      string `json:"PositionClaim"`
 	AutoCreateAccounts bool   `json:"AutoCreateAccounts"`
 	AutoLinkByEmail    bool   `json:"AutoLinkByEmail"`
 	DefaultTeam        string `json:"DefaultTeam"`

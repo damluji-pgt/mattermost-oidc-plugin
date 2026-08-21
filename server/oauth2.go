@@ -79,6 +79,7 @@ type OIDCUserInfo struct {
 	Username  string `json:"username"`
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
+	Position  string `json:"position,omitempty"`
 }
 
 // handleOAuth2Connect initiates the OIDC login flow by redirecting the user
@@ -533,6 +534,7 @@ func (p *Plugin) extractUserInfo(ctx context.Context, idToken *oidc.IDToken, oau
 		Username:  getStringClaim(claims, config.UsernameClaim),
 		FirstName: getStringClaim(claims, config.FirstNameClaim),
 		LastName:  getStringClaim(claims, config.LastNameClaim),
+		Position:  getStringClaim(claims, config.PositionClaim),
 	}
 
 	// Fallback: use email prefix as username if no username claim found
@@ -608,6 +610,7 @@ func (p *Plugin) getOrCreateUser(userInfo *OIDCUserInfo, config *Configuration) 
 		Username:      userInfo.Username,
 		FirstName:     userInfo.FirstName,
 		LastName:      userInfo.LastName,
+		Position:      userInfo.Position,
 		AuthService:   AuthService,
 		AuthData:      model.NewPointer(userInfo.Subject),
 		EmailVerified: true,
@@ -669,6 +672,10 @@ func (p *Plugin) updateUserIfChanged(user *model.User, info *OIDCUserInfo) (*mod
 	}
 	if info.LastName != "" && user.LastName != info.LastName {
 		user.LastName = info.LastName
+		changed = true
+	}
+	if info.Position != "" && user.Position != info.Position {
+		user.Position = info.Position
 		changed = true
 	}
 

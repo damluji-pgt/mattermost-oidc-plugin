@@ -209,19 +209,24 @@ func TestSanitizeUsername(t *testing.T) {
 
 func TestConfigurationClone(t *testing.T) {
 	original := &Configuration{
-		Enable:       true,
-		IssuerURL:    "https://example.com",
-		ClientID:     "test-id",
-		ClientSecret: "test-secret",
+		Enable:        true,
+		IssuerURL:     "https://example.com",
+		ClientID:      "test-id",
+		ClientSecret:  "test-secret",
+		PositionClaim: "position",
 	}
 
 	clone := original.Clone()
 
 	// Modify clone
 	clone.ClientID = "modified"
+	clone.PositionClaim = "job_title"
 
 	// Original should be unchanged
 	if original.ClientID != "test-id" {
-		t.Error("Clone modified the original configuration")
+		t.Error("Clone modified the original configuration ClientID")
+	}
+	if original.PositionClaim != "position" {
+		t.Error("Clone modified the original configuration PositionClaim")
 	}
 }

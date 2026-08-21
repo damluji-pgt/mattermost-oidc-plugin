@@ -75,6 +75,11 @@ make server   # Go binaries for all platforms
 make webapp   # Webpack bundle
 ```
 
+### Build bundle for specific platform only
+```bash
+make bundle SERVER_PLATFORMS=linux/amd64
+```
+
 ## Tests
 
 ```bash
@@ -119,19 +124,23 @@ Create a new OIDC application/client with your provider using the following sett
 
 Go to **System Console → Plugins → OIDC Authentication**:
 
-| Field                    | Description                       | Example                                               |
-|--------------------------|-----------------------------------|-------------------------------------------------------|
-| **Enable**               | Enable the plugin                 | `true`                                                |
-| **Issuer URL**           | OIDC Issuer URL                   | `https://idp.example.com/application/o/mostlymatter/` |
-| **Client ID**            | Client ID from your provider      | `mostlymatter`                                        |
-| **Client Secret**        | Client secret from your provider  | `secret123`                                           |
-| **Scopes**               | Requested scopes                  | `openid profile email`                                |
-| **Button Text**          | Text on the login button          | `Log in with SSO`                                     |
-| **Button Color**         | Color of the login button         | `#0058CC`                                             |
-| **Username Claim**       | OIDC claim for username           | `preferred_username`                                  |
-| **Email Claim**          | OIDC claim for email              | `email`                                               |
-| **Auto-Create Accounts** | Automatically create new accounts | `true`                                                |
-| **Default Team**         | Team slug for new users           | `main`                                                |
+| Field                                    | Description                       | Example                                               |
+|------------------------------------------|-----------------------------------|-------------------------------------------------------|
+| **Enable**                               | Enable the plugin                 | `true`                                                |
+| **Issuer URL**                           | OIDC Issuer URL                   | `https://idp.example.com/application/o/mostlymatter/` |
+| **Client ID**                            | Client ID from your provider      | `mostlymatter`                                        |
+| **Client Secret**                        | Client secret from your provider  | `secret123`                                           |
+| **Scopes**                               | Requested scopes                  | `openid profile email`                                |
+| **Button Text**                          | Text on the login button          | `Log in with SSO`                                     |
+| **Button Color**                         | Color of the login button         | `#0058CC`                                             |
+| **Username Claim**                       | OIDC claim for username           | `preferred_username`                                  |
+| **Email Claim**                          | OIDC claim for email              | `email`                                               |
+| **First Name Claim**                     | OIDC claim for first name         | `given_name`                                          |
+| **Last Name Claim**                      | OIDC claim for last name          | `family_name`                                         |
+| **Position Claim**                       | OIDC claim for position/job title | `position`                                            |
+| **Auto-Create Accounts**                 | Automatically create new accounts | `true`                                                |
+| **Auto-Link Existing Accounts by Email** | Link existing accounts by email   | `false`                                               |
+| **Default Team**                         | Team slug for new users           | `main`                                                |
 
 ### 3. Restart the server
 

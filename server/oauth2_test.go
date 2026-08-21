@@ -5,6 +5,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/mattermost/mattermost/server/public/model"
+	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
+	"github.com/stretchr/testify/mock"
 )
 
 func TestGetStringClaim(t *testing.T) {
@@ -12,6 +16,8 @@ func TestGetStringClaim(t *testing.T) {
 		"sub":                "user-123",
 		"email":              "test@example.com",
 		"preferred_username": "testuser",
+		"position":           "Software Engineer",
+		"job_title":          "DevOps Lead",
 		"numeric_value":      42,
 		"nil_value":          nil,
 	}
@@ -23,6 +29,8 @@ func TestGetStringClaim(t *testing.T) {
 	}{
 		{"existing string claim", "sub", "user-123"},
 		{"existing email claim", "email", "test@example.com"},
+		{"existing position claim", "position", "Software Engineer"},
+		{"existing job_title claim", "job_title", "DevOps Lead"},
 		{"non-existent claim", "missing", ""},
 		{"numeric claim returns empty", "numeric_value", ""},
 		{"nil claim returns empty", "nil_value", ""},
@@ -168,4 +176,155 @@ func TestStateCookieMatches(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUpdateUserIfChanged(t *testing.T) {
+	t.Run("no changes", func(t *testing.T) {
+		p := &Plugin{}
+		user := &model.User{
+			Id:        "user-1",
+			Email:     "user@example.com",
+			FirstName: "John",
+			LastName:  "Doe",
+			Position:  "Software Engineer",
+		}
+		info := &OIDCUserInfo{
+			Email:     "user@example.com",
+			FirstName: "John",
+			LastName:  "Doe",
+			Position:  "Software Engineer",
+		}
+
+		updated, err := p.updateUserIfChanged(user, info)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if updated.Position != "Software Engineer" {
+			t.Errorf("Position = %q, want 'Software Engineer'", updated.Position)
+		}
+	})
+
+	t.Run("position changed", func(t *testing.T) {
+		api := &plugintest.API{}
+		p := &Plugin{}
+		p.SetAPI(api)
+
+		user := &model.User{
+			Id:        "user-1",
+			Email:     "user@example.com",
+			FirstName: "John",
+			LastName:  "Doe",
+			Position:  "Junior Developer",
+		}
+		info := &OIDCUserInfo{
+			Email:     "user@example.com",
+			FirstName: "John",
+			LastName:  "Doe",
+			Position:  "Senior Developer",
+		}
+
+		api.On("UpdateUser", mock.MatchedBy(func(u *model.User) bool {
+			return u.Id == "user-1" && u.Position == "Senior Developer"
+		})).Return(func(u *model.User) *model.User {
+			return u
+		}, nil)
+
+		updated, err := p.updateUserIfChanged(user, info)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if updated.Position != "Senior Developer" {
+			t.Errorf("Position = %q, want 'Senior Developer'", updated.Position)
+		}
+		api.AssertExpectations(t)
+	})
+
+	t.Run("empty position claim does not overwrite existing position", func(t *testing.T) {
+		p := &Plugin{}
+		user := &model.User{
+			Id:        "user-1",
+			Email:     "user@example.com",
+			FirstName: "John",
+			LastName:  "Doe",
+			Position:  "Product Manager",
+		}
+		info := &OIDCUserInfo{
+			Email:     "user@example.com",
+			FirstName: "John",
+			LastName:  "Doe",
+			Position:  "",
+		}
+
+		updated, err := p.updateUserIfChanged(user, info)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if updated.Position != "Product Manager" {
+			t.Errorf("Position = %q, want 'Product Manager'", updated.Position)
+		}
+	})
+
+	t.Run("all fields updated when changed", func(t *testing.T) {
+		api := &plugintest.API{}
+		p := &Plugin{}
+		p.SetAPI(api)
+
+		user := &model.User{
+			Id:        "user-1",
+			Email:     "old@example.com",
+			FirstName: "OldFirst",
+			LastName:  "OldLast",
+			Position:  "OldPos",
+		}
+		info := &OIDCUserInfo{
+			Email:     "new@example.com",
+			FirstName: "NewFirst",
+			LastName:  "NewLast",
+			Position:  "NewPos",
+		}
+
+		api.On("UpdateUser", mock.MatchedBy(func(u *model.User) bool {
+			return u.Email == "new@example.com" &&
+				u.FirstName == "NewFirst" &&
+				u.LastName == "NewLast" &&
+				u.Position == "NewPos"
+		})).Return(func(u *model.User) *model.User {
+			return u
+		}, nil)
+
+		updated, err := p.updateUserIfChanged(user, info)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if updated.Email != "new@example.com" || updated.FirstName != "NewFirst" || updated.LastName != "NewLast" || updated.Position != "NewPos" {
+			t.Errorf("user fields not updated correctly: %+v", updated)
+		}
+		api.AssertExpectations(t)
+	})
+
+	t.Run("api update error propagates", func(t *testing.T) {
+		api := &plugintest.API{}
+		p := &Plugin{}
+		p.SetAPI(api)
+
+		user := &model.User{
+			Id:       "user-1",
+			Email:    "user@example.com",
+			Position: "OldPos",
+		}
+		info := &OIDCUserInfo{
+			Position: "NewPos",
+		}
+
+		api.On("UpdateUser", mock.Anything).Return(nil, model.NewAppError("UpdateUser", "test.error", nil, "failed to update", http.StatusInternalServerError))
+
+		_, err := p.updateUserIfChanged(user, info)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "failed to update user") {
+			t.Errorf("error = %q, want containing 'failed to update user'", err.Error())
+		}
+		api.AssertExpectations(t)
+	})
 }
