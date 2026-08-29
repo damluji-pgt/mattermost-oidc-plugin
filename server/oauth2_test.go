@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
 	"github.com/stretchr/testify/mock"
+	"golang.org/x/oauth2"
 )
 
 func TestGetStringClaim(t *testing.T) {
@@ -327,4 +329,47 @@ func TestUpdateUserIfChanged(t *testing.T) {
 		}
 		api.AssertExpectations(t)
 	})
+}
+
+func TestNonceMatches(t *testing.T) {
+	tests := []struct {
+		name     string
+		expected string
+		got      string
+		want     bool
+	}{
+		{"equal", "abc123", "abc123", true},
+		{"mismatch", "abc123", "other", false},
+		{"empty got", "abc123", "", false},
+		{"empty expected", "", "abc123", false},
+		{"both empty", "", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := nonceMatches(tt.expected, tt.got); got != tt.want {
+				t.Errorf("nonceMatches(%q, %q) = %v, want %v", tt.expected, tt.got, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOAuthStatePKCENonceRoundTrip(t *testing.T) {
+	orig := OAuthState{
+		Token:        "tok",
+		CreateAt:     1,
+		ReturnTo:     "/",
+		CodeVerifier: oauth2.GenerateVerifier(),
+		Nonce:        "deadbeef",
+	}
+	raw, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got OAuthState
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.CodeVerifier != orig.CodeVerifier || got.Nonce != orig.Nonce {
+		t.Errorf("round-trip = %+v, want verifier/nonce from %+v", got, orig)
+	}
 }

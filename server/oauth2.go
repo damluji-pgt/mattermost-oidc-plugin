@@ -51,6 +51,13 @@ type OAuthState struct {
 	// with the opener) but, instead of a 302, renders an HTML page that closes the
 	// popup and navigates the opener to the return path.
 	Popup bool `json:"popup,omitempty"`
+	// CodeVerifier is the PKCE S256 verifier (RFC 7636). Set only when the IdP
+	// advertises S256 in code_challenge_methods_supported. Stored in KV, never
+	// in the URL state parameter.
+	CodeVerifier string `json:"code_verifier,omitempty"`
+	// Nonce is sent on the authorization request and must match the ID token
+	// nonce claim after verification (OIDC Core 3.1.3.7).
+	Nonce string `json:"nonce,omitempty"`
 }
 
 // allowedMobileSchemes are the exact custom-scheme callback URLs the native
@@ -127,13 +134,29 @@ func (p *Plugin) handleOAuth2Connect(w http.ResponseWriter, r *http.Request) {
 	// is ignored when a mobile redirect is present.
 	popup := mobileRedirect == "" && r.URL.Query().Get("popup") == "1"
 
+	nonce, err := generateRandomKey(16)
+	if err != nil {
+		p.API.LogError("Failed to generate OIDC nonce", "error", err.Error())
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
 	state := OAuthState{
 		Token:          stateToken,
 		CreateAt:       time.Now().UnixMilli(),
 		ReturnTo:       returnTo,
 		MobileRedirect: mobileRedirect,
 		Popup:          popup,
+		Nonce:          nonce,
 	}
+
+	authOpts := []oauth2.AuthCodeOption{
+		oauth2.AccessTypeOnline,
+		oauth2.SetAuthURLParam("nonce", nonce),
+	}
+	codeVerifier := oauth2.GenerateVerifier()
+	state.CodeVerifier = codeVerifier
+	authOpts = append(authOpts, oauth2.S256ChallengeOption(codeVerifier))
 
 	stateBytes, err := json.Marshal(state)
 	if err != nil {
@@ -156,7 +179,7 @@ func (p *Plugin) handleOAuth2Connect(w http.ResponseWriter, r *http.Request) {
 	p.setStateCookie(w, stateToken)
 
 	// Redirect to the OIDC provider
-	authURL := oauthConfig.AuthCodeURL(signedState, oauth2.AccessTypeOnline)
+	authURL := oauthConfig.AuthCodeURL(signedState, authOpts...)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
@@ -263,7 +286,12 @@ func (p *Plugin) handleOAuth2Callback(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	token, err := oauthConfig.Exchange(ctx, code)
+	var exchangeOpts []oauth2.AuthCodeOption
+	if state.CodeVerifier != "" {
+		exchangeOpts = append(exchangeOpts, oauth2.VerifierOption(state.CodeVerifier))
+	}
+
+	token, err := oauthConfig.Exchange(ctx, code, exchangeOpts...)
 	if err != nil {
 		p.API.LogError("Failed to exchange authorization code", "error", err.Error())
 		p.renderError(w, "Failed to complete authentication. Please try again.")
@@ -281,6 +309,12 @@ func (p *Plugin) handleOAuth2Callback(w http.ResponseWriter, r *http.Request) {
 	idToken, err := verifier.Verify(ctx, rawIDToken)
 	if err != nil {
 		p.API.LogError("Failed to verify ID token", "error", err.Error())
+		p.renderError(w, "Authentication failed: invalid ID token")
+		return
+	}
+
+	if !nonceMatches(state.Nonce, idToken.Nonce) {
+		p.API.LogError("OIDC nonce mismatch or missing in ID token")
 		p.renderError(w, "Authentication failed: invalid ID token")
 		return
 	}
@@ -856,4 +890,13 @@ func sanitizeUsername(username string) string {
 	}
 
 	return result
+}
+
+// nonceMatches reports whether the ID token nonce equals the value stored at
+// connect. An empty expected nonce is a failure: we always send one.
+func nonceMatches(expected, got string) bool {
+	if expected == "" {
+		return false
+	}
+	return hmac.Equal([]byte(expected), []byte(got))
 }

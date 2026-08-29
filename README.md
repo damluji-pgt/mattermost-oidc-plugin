@@ -201,6 +201,7 @@ mattermost-oidc-plugin/
 ## Security
 
 - **HMAC-signed state parameters** prevent CSRF attacks
+- **PKCE S256** is always sent on the authorization request; the OIDC `nonce` is always sent and checked on the ID token
 - **State tokens** are stored in the KV store with an expiry time
 - **ID token verification** via the provider's JWKS
 - **No client secret** is sent to the browser
