@@ -74,12 +74,13 @@ func isAllowedMobileScheme(redirect string) bool {
 
 // OIDCUserInfo holds the user information extracted from OIDC claims.
 type OIDCUserInfo struct {
-	Subject   string `json:"sub"`
-	Email     string `json:"email"`
-	Username  string `json:"username"`
-	FirstName string `json:"first_name"`
-	LastName  string `json:"last_name"`
-	Position  string `json:"position,omitempty"`
+	Subject       string `json:"sub"`
+	Email         string `json:"email"`
+	Username      string `json:"username"`
+	FirstName     string `json:"first_name"`
+	LastName      string `json:"last_name"`
+	Position      string `json:"position,omitempty"`
+	EmailVerified *bool  `json:"email_verified,omitempty"`
 }
 
 // handleOAuth2Connect initiates the OIDC login flow by redirecting the user
@@ -290,6 +291,13 @@ func (p *Plugin) handleOAuth2Callback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		p.API.LogError("Failed to extract user info", "error", err.Error())
 		p.renderError(w, "Failed to read user information from identity provider")
+		return
+	}
+
+	if config.RequireEmailVerified && (userInfo.EmailVerified == nil || !*userInfo.EmailVerified) {
+		p.API.LogWarn("Rejected OIDC login: email not verified by provider",
+			"email", userInfo.Email, "subject", userInfo.Subject, "claim", config.EmailVerifiedClaim)
+		p.renderError(w, "Your email address is not verified by your identity provider.")
 		return
 	}
 
@@ -529,12 +537,13 @@ func (p *Plugin) extractUserInfo(ctx context.Context, idToken *oidc.IDToken, oau
 	p.API.LogDebug("OIDC claims received", "claim_keys", strings.Join(claimKeys, ", "))
 
 	info := &OIDCUserInfo{
-		Subject:   idToken.Subject,
-		Email:     getStringClaim(claims, config.EmailClaim),
-		Username:  getStringClaim(claims, config.UsernameClaim),
-		FirstName: getStringClaim(claims, config.FirstNameClaim),
-		LastName:  getStringClaim(claims, config.LastNameClaim),
-		Position:  getStringClaim(claims, config.PositionClaim),
+		Subject:       idToken.Subject,
+		Email:         getStringClaim(claims, config.EmailClaim),
+		Username:      getStringClaim(claims, config.UsernameClaim),
+		FirstName:     getStringClaim(claims, config.FirstNameClaim),
+		LastName:      getStringClaim(claims, config.LastNameClaim),
+		Position:      getStringClaim(claims, config.PositionClaim),
+		EmailVerified: getBoolClaim(claims, config.EmailVerifiedClaim),
 	}
 
 	// Fallback: use email prefix as username if no username claim found
@@ -613,7 +622,7 @@ func (p *Plugin) getOrCreateUser(userInfo *OIDCUserInfo, config *Configuration) 
 		Position:      userInfo.Position,
 		AuthService:   AuthService,
 		AuthData:      model.NewPointer(userInfo.Subject),
-		EmailVerified: true,
+		EmailVerified: userInfo.EmailVerified == nil || *userInfo.EmailVerified,
 	}
 
 	createdUser, appErr := p.API.CreateUser(newUser)
@@ -676,6 +685,10 @@ func (p *Plugin) updateUserIfChanged(user *model.User, info *OIDCUserInfo) (*mod
 	}
 	if info.Position != "" && user.Position != info.Position {
 		user.Position = info.Position
+		changed = true
+	}
+	if info.EmailVerified != nil && user.EmailVerified != *info.EmailVerified {
+		user.EmailVerified = *info.EmailVerified
 		changed = true
 	}
 
@@ -821,6 +834,25 @@ func getStringClaim(claims map[string]interface{}, key string) string {
 		}
 	}
 	return ""
+}
+
+func getBoolClaim(claims map[string]interface{}, key string) *bool {
+	if key == "" {
+		return nil
+	}
+	val, ok := claims[key]
+	if !ok {
+		return nil
+	}
+	switch v := val.(type) {
+	case bool:
+		return model.NewPointer(v)
+	case string:
+		if b, err := strconv.ParseBool(v); err == nil {
+			return model.NewPointer(b)
+		}
+	}
+	return nil
 }
 
 // sanitizeUsername makes a username compatible with Mattermost's requirements.
