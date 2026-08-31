@@ -295,8 +295,7 @@ func (p *Plugin) handleOAuth2Callback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if config.RequireEmailVerified && (userInfo.EmailVerified == nil || !*userInfo.EmailVerified) {
-		p.API.LogWarn("Rejected OIDC login: email not verified by provider",
-			"email", userInfo.Email, "subject", userInfo.Subject, "claim", config.EmailVerifiedClaim)
+		p.API.LogWarn("Rejected OIDC login: email not verified by provider", "email", userInfo.Email, "subject", userInfo.Subject, "claim", config.EmailVerifiedClaim)
 		p.renderError(w, "Your email address is not verified by your identity provider.")
 		return
 	}
