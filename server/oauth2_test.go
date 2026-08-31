@@ -48,6 +48,42 @@ func TestGetStringClaim(t *testing.T) {
 	}
 }
 
+func TestGetBoolClaim(t *testing.T) {
+	claims := map[string]interface{}{
+		"email_verified": true,
+		"verified_str":   "true",
+		"false_str":      "false",
+		"numeric_value":  1,
+	}
+
+	tests := []struct {
+		name     string
+		key      string
+		expected *bool
+	}{
+		{"bool true", "email_verified", model.NewPointer(true)},
+		{"string true", "verified_str", model.NewPointer(true)},
+		{"string false", "false_str", model.NewPointer(false)},
+		{"missing claim", "missing", nil},
+		{"empty key", "", nil},
+		{"unexpected type", "numeric_value", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := getBoolClaim(claims, tt.key)
+			switch {
+			case tt.expected == nil && got != nil:
+				t.Errorf("getBoolClaim(%q) = %v, want nil", tt.key, *got)
+			case tt.expected != nil && got == nil:
+				t.Errorf("getBoolClaim(%q) = nil, want %v", tt.key, *tt.expected)
+			case tt.expected != nil && got != nil && *got != *tt.expected:
+				t.Errorf("getBoolClaim(%q) = %v, want %v", tt.key, *got, *tt.expected)
+			}
+		})
+	}
+}
+
 func TestGenerateRandomKey(t *testing.T) {
 	key1, err := generateRandomKey(16)
 	if err != nil {
@@ -328,6 +364,58 @@ func TestUpdateUserIfChanged(t *testing.T) {
 			t.Errorf("error = %q, want containing 'failed to update user'", err.Error())
 		}
 		api.AssertExpectations(t)
+	})
+
+	t.Run("email verified revoked by provider", func(t *testing.T) {
+		api := &plugintest.API{}
+		p := &Plugin{}
+		p.SetAPI(api)
+
+		user := &model.User{
+			Id:            "user-1",
+			Email:         "user@example.com",
+			EmailVerified: true,
+		}
+		info := &OIDCUserInfo{
+			Email:         "user@example.com",
+			EmailVerified: model.NewPointer(false),
+		}
+
+		api.On("UpdateUser", mock.MatchedBy(func(u *model.User) bool {
+			return u.Id == "user-1" && !u.EmailVerified
+		})).Return(func(u *model.User) *model.User {
+			return u
+		}, nil)
+
+		updated, err := p.updateUserIfChanged(user, info)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if updated.EmailVerified {
+			t.Error("EmailVerified should be false after provider downgrade")
+		}
+		api.AssertExpectations(t)
+	})
+
+	t.Run("nil email verified claim leaves user untouched", func(t *testing.T) {
+		p := &Plugin{}
+		user := &model.User{
+			Id:            "user-1",
+			Email:         "user@example.com",
+			EmailVerified: true,
+		}
+		info := &OIDCUserInfo{
+			Email:         "user@example.com",
+			EmailVerified: nil,
+		}
+
+		updated, err := p.updateUserIfChanged(user, info)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !updated.EmailVerified {
+			t.Error("EmailVerified should remain true when claim is absent")
+		}
 	})
 }
 

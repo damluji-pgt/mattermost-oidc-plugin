@@ -134,9 +134,13 @@ Go to **System Console → Plugins → OIDC Authentication**:
 | **First Name Claim**                     | OIDC claim for first name         | `given_name`                                          |
 | **Last Name Claim**                      | OIDC claim for last name          | `family_name`                                         |
 | **Position Claim**                       | OIDC claim for position/job title | `position`                                            |
+| **Email Verified Claim**                 | OIDC claim for email verification | _(empty, set to `email_verified` to enable)_          |
+| **Require Email Verified**               | Reject login if claim is not true | `false`                                               |
 | **Auto-Create Accounts**                 | Automatically create new accounts | `true`                                                |
 | **Auto-Link Existing Accounts by Email** | Link existing accounts by email   | `false`                                               |
 | **Default Team**                         | Team slug for new users           | `main`                                                |
+
+When **Auto-Link Existing Accounts by Email** is enabled, consider also enabling **Require Email Verified** after setting **Email Verified Claim** to `email_verified` (or your provider's claim name) if your identity provider sends that claim. This prevents linking to an existing account via an unverified email address.
 
 ### 3. Restart the server
 
