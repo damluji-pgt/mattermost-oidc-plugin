@@ -51,9 +51,7 @@ type OAuthState struct {
 	// with the opener) but, instead of a 302, renders an HTML page that closes the
 	// popup and navigates the opener to the return path.
 	Popup bool `json:"popup,omitempty"`
-	// CodeVerifier is the PKCE S256 verifier (RFC 7636). Set only when the IdP
-	// advertises S256 in code_challenge_methods_supported. Stored in KV, never
-	// in the URL state parameter.
+	// CodeVerifier is the PKCE S256 verifier (RFC 7636). Stored in KV, never in the URL state parameter.
 	CodeVerifier string `json:"code_verifier,omitempty"`
 	// Nonce is sent on the authorization request and must match the ID token
 	// nonce claim after verification (OIDC Core 3.1.3.7).
@@ -892,8 +890,7 @@ func sanitizeUsername(username string) string {
 	return result
 }
 
-// nonceMatches reports whether the ID token nonce equals the value stored at
-// connect. An empty expected nonce is a failure: we always send one.
+// nonceMatches reports whether the ID token nonce equals the value stored at connect. An empty expected nonce is a failure: we always send one.
 func nonceMatches(expected, got string) bool {
 	if expected == "" {
 		return false
