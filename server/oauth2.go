@@ -814,31 +814,67 @@ func stateCookieMatches(r *http.Request, token string) bool {
 	return hmac.Equal([]byte(c.Value), []byte(token))
 }
 
-// setSessionCookie writes the Mattermost session token as a cookie.
+// setSessionCookie writes the Mattermost session cookies (MMAUTHTOKEN, MMUSERID,
+// MMCSRF) with the same Domain and lifetime core uses in AttachSessionCookies.
+//
+// Domain must match core: with ServiceSettings.AllowCookiesForSubdomains core
+// scopes its cookies to Domain=<SiteURL host>. A host-only cookie of the same name
+// is a *different* cookie to the browser, so it cannot replace a stale core
+// cookie; both get sent (older first) and core reads the first one, rejecting the
+// fresh login as "Invalid session". It must also persist (MaxAge/Expires) like
+// core's, or the login is lost when the Desktop app is restarted.
 func (p *Plugin) setSessionCookie(w http.ResponseWriter, r *http.Request, session *model.Session, siteURL string) {
 	secure := strings.HasPrefix(siteURL, "https")
+	domain := p.getCookieDomain()
 
-	cookie := &http.Cookie{
-		Name:     "MMAUTHTOKEN",
-		Value:    session.Token,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
+	maxAge := int((session.ExpiresAt - model.GetMillis()) / 1000)
+	if maxAge < 1 {
+		maxAge = 1
 	}
-	http.SetCookie(w, cookie)
+	expires := time.UnixMilli(session.ExpiresAt)
 
-	// Also set MMUSERID cookie for the webapp
-	// (The webapp uses this to know that a user is logged in)
-	useridCookie := &http.Cookie{
-		Name:     "MMUSERID",
-		Value:    session.UserId,
-		Path:     "/",
-		HttpOnly: false,
-		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
+	cookies := []*http.Cookie{
+		{Name: model.SessionCookieToken, Value: session.Token, HttpOnly: true},
+		// MMUSERID tells the webapp a user is logged in; MMCSRF feeds the
+		// X-CSRF-Token header of its non-GET requests.
+		{Name: model.SessionCookieUser, Value: session.UserId},
+		{Name: model.SessionCookieCsrf, Value: session.GetCSRF()},
 	}
-	http.SetCookie(w, useridCookie)
+	for _, c := range cookies {
+		c.Path = "/"
+		c.Domain = domain
+		c.MaxAge = maxAge
+		c.Expires = expires
+		c.Secure = secure
+		c.SameSite = http.SameSiteLaxMode
+		http.SetCookie(w, c)
+
+		// Drop any host-only copy left by an earlier login through this plugin, so
+		// the browser keeps a single cookie per name.
+		if domain != "" {
+			http.SetCookie(w, &http.Cookie{
+				Name:   c.Name,
+				Value:  "",
+				Path:   "/",
+				MaxAge: -1,
+				Secure: secure,
+			})
+		}
+	}
+}
+
+// getCookieDomain mirrors core's App.GetCookieDomain: the SiteURL host when
+// AllowCookiesForSubdomains is on, otherwise "" (host-only cookies).
+func (p *Plugin) getCookieDomain() string {
+	cfg := p.API.GetConfig()
+	if cfg == nil || cfg.ServiceSettings.AllowCookiesForSubdomains == nil || !*cfg.ServiceSettings.AllowCookiesForSubdomains {
+		return ""
+	}
+	u, err := url.Parse(p.getSiteURL())
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 // renderError renders a simple error page to the user.

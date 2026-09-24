@@ -461,3 +461,93 @@ func TestOAuthStatePKCENonceRoundTrip(t *testing.T) {
 		t.Errorf("round-trip = %+v, want verifier/nonce from %+v", got, orig)
 	}
 }
+
+func TestSetSessionCookie(t *testing.T) {
+	newPlugin := func(allowSubdomains bool) *Plugin {
+		siteURL := "https://chat.example.com"
+		api := &plugintest.API{}
+		api.On("GetConfig").Return(&model.Config{ServiceSettings: model.ServiceSettings{
+			SiteURL:                   &siteURL,
+			AllowCookiesForSubdomains: &allowSubdomains,
+		}})
+		p := &Plugin{}
+		p.SetAPI(api)
+		return p
+	}
+	session := &model.Session{
+		Token:     "new-token",
+		UserId:    "user-1",
+		ExpiresAt: model.GetMillis() + 720*60*60*1000,
+		Props:     model.StringMap{"csrf": "csrf-1"},
+	}
+	// The browser may still hold a stale core cookie; the new one must replace it.
+	req := httptest.NewRequest(http.MethodGet, "https://chat.example.com/plugins/mattermost-oidc/oauth2/callback", nil)
+
+	t.Run("subdomain cookies: same Domain as core, host-only copies dropped", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		newPlugin(true).setSessionCookie(rec, req, session, "https://chat.example.com")
+
+		set := map[string]*http.Cookie{}
+		dropped := map[string]bool{}
+		for _, c := range rec.Result().Cookies() {
+			if c.MaxAge < 0 {
+				if c.Domain != "" {
+					t.Errorf("%s: deletion must target the host-only cookie, got Domain=%q", c.Name, c.Domain)
+				}
+				dropped[c.Name] = true
+				continue
+			}
+			set[c.Name] = c
+		}
+		want := map[string]string{
+			model.SessionCookieToken: "new-token",
+			model.SessionCookieUser:  "user-1",
+			model.SessionCookieCsrf:  "csrf-1",
+		}
+		for name, value := range want {
+			c := set[name]
+			if c == nil {
+				t.Fatalf("%s not set", name)
+			}
+			if c.Value != value {
+				t.Errorf("%s = %q, want %q", name, c.Value, value)
+			}
+			if c.Domain != "chat.example.com" {
+				t.Errorf("%s Domain = %q, want chat.example.com", name, c.Domain)
+			}
+			if c.MaxAge <= 0 {
+				t.Errorf("%s MaxAge = %d, want a persistent cookie", name, c.MaxAge)
+			}
+			if !c.Secure {
+				t.Errorf("%s should be Secure on https", name)
+			}
+			if !dropped[name] {
+				t.Errorf("%s: host-only copy not dropped", name)
+			}
+		}
+		if !set[model.SessionCookieToken].HttpOnly {
+			t.Error("MMAUTHTOKEN must be HttpOnly")
+		}
+		if set[model.SessionCookieCsrf].HttpOnly {
+			t.Error("MMCSRF must be readable by the webapp")
+		}
+	})
+
+	t.Run("host-only cookies when subdomains are off", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		newPlugin(false).setSessionCookie(rec, req, session, "https://chat.example.com")
+
+		cookies := rec.Result().Cookies()
+		if len(cookies) != 3 {
+			t.Fatalf("got %d cookies, want 3 (no deletions)", len(cookies))
+		}
+		for _, c := range cookies {
+			if c.Domain != "" {
+				t.Errorf("%s Domain = %q, want host-only", c.Name, c.Domain)
+			}
+			if c.MaxAge <= 0 {
+				t.Errorf("%s MaxAge = %d, want a persistent cookie", c.Name, c.MaxAge)
+			}
+		}
+	})
+}
