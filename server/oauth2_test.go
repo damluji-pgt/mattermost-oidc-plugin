@@ -518,6 +518,9 @@ func TestSetSessionCookie(t *testing.T) {
 			if c.Domain != "chat.example.com" {
 				t.Errorf("%s Domain = %q, want chat.example.com", name, c.Domain)
 			}
+			if c.Path != "/" {
+				t.Errorf("%s Path = %q, want /", name, c.Path)
+			}
 			if c.MaxAge <= 0 {
 				t.Errorf("%s MaxAge = %d, want a persistent cookie", name, c.MaxAge)
 			}
@@ -554,9 +557,68 @@ func TestSetSessionCookie(t *testing.T) {
 			if c.Domain != "" {
 				t.Errorf("%s Domain = %q, want host-only", c.Name, c.Domain)
 			}
+			if c.Path != "/" {
+				t.Errorf("%s Path = %q, want /", c.Name, c.Path)
+			}
 			if c.MaxAge <= 0 {
 				t.Errorf("%s MaxAge = %d, want a persistent cookie", c.Name, c.MaxAge)
 			}
 		}
 	})
+
+	t.Run("subpath with subdomain cookies", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		newPlugin(true).setSessionCookie(rec, req, session, "https://chat.example.com/mattermost")
+
+		set := map[string]*http.Cookie{}
+		var dropped int
+		for _, c := range rec.Result().Cookies() {
+			if c.MaxAge < 0 {
+				if c.Domain != "" {
+					t.Errorf("%s: deletion must target host-only cookie, got Domain=%q", c.Name, c.Domain)
+				}
+				if c.Path == "/mattermost" {
+					dropped++
+				}
+				continue
+			}
+			set[c.Name] = c
+		}
+		if dropped != 3 {
+			t.Errorf("got %d deletions at /mattermost, want 3", dropped)
+		}
+		for _, name := range []string{model.SessionCookieToken, model.SessionCookieUser, model.SessionCookieCsrf} {
+			c := set[name]
+			if c == nil {
+				t.Fatalf("%s not set", name)
+			}
+			if c.Path != "/mattermost" {
+				t.Errorf("%s Path = %q, want /mattermost", name, c.Path)
+			}
+			if c.Domain != "chat.example.com" {
+				t.Errorf("%s Domain = %q, want chat.example.com", name, c.Domain)
+			}
+		}
+	})
+}
+
+func TestGetCookiePath(t *testing.T) {
+	tests := []struct {
+		siteURL string
+		want    string
+	}{
+		{"", "/"},
+		{"https://chat.example.com", "/"},
+		{"https://chat.example.com/", "/"},
+		{"https://chat.example.com/mattermost", "/mattermost"},
+		{"https://chat.example.com/mattermost/", "/mattermost"},
+		{"https://chat.example.com/sub/path", "/sub/path"},
+		{"http://localhost:8065/mm", "/mm"},
+	}
+	for _, tc := range tests {
+		got := getCookiePath(tc.siteURL)
+		if got != tc.want {
+			t.Errorf("getCookiePath(%q) = %q, want %q", tc.siteURL, got, tc.want)
+		}
+	}
 }

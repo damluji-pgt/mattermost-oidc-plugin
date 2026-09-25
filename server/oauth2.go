@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/mail"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -819,19 +820,20 @@ func stateCookieMatches(r *http.Request, token string) bool {
 func (p *Plugin) setSessionCookie(w http.ResponseWriter, r *http.Request, session *model.Session, siteURL string) {
 	secure := strings.HasPrefix(siteURL, "https")
 	domain := p.getCookieDomain()
+	cookiePath := getCookiePath(siteURL)
 
 	maxAge := max(int((session.ExpiresAt-model.GetMillis())/1000), 1)
 	expires := time.UnixMilli(session.ExpiresAt)
 
 	cookies := []*http.Cookie{
-		{Name: model.SessionCookieToken, Value: session.Token, HttpOnly: true, Path: "/", Domain: domain, MaxAge: maxAge, Expires: expires, Secure: secure, SameSite: http.SameSiteLaxMode},
-		{Name: model.SessionCookieUser, Value: session.UserId, Path: "/", Domain: domain, MaxAge: maxAge, Expires: expires, Secure: secure, SameSite: http.SameSiteLaxMode},
-		{Name: model.SessionCookieCsrf, Value: session.GetCSRF(), Path: "/", Domain: domain, MaxAge: maxAge, Expires: expires, Secure: secure, SameSite: http.SameSiteLaxMode},
+		{Name: model.SessionCookieToken, Value: session.Token, HttpOnly: true, Path: cookiePath, Domain: domain, MaxAge: maxAge, Expires: expires, Secure: secure, SameSite: http.SameSiteLaxMode},
+		{Name: model.SessionCookieUser, Value: session.UserId, Path: cookiePath, Domain: domain, MaxAge: maxAge, Expires: expires, Secure: secure, SameSite: http.SameSiteLaxMode},
+		{Name: model.SessionCookieCsrf, Value: session.GetCSRF(), Path: cookiePath, Domain: domain, MaxAge: maxAge, Expires: expires, Secure: secure, SameSite: http.SameSiteLaxMode},
 	}
 	for _, c := range cookies {
 		// Drop any host-only copy left by an earlier login through this plugin, so the browser keeps a single cookie per name.
 		if domain != "" {
-			http.SetCookie(w, &http.Cookie{Name: c.Name, Value: "", Path: "/", MaxAge: -1, Secure: c.Secure, HttpOnly: c.HttpOnly, SameSite: c.SameSite})
+			http.SetCookie(w, &http.Cookie{Name: c.Name, Value: "", Path: cookiePath, MaxAge: -1, Secure: c.Secure, HttpOnly: c.HttpOnly, SameSite: c.SameSite})
 		}
 		http.SetCookie(w, c)
 	}
@@ -848,6 +850,25 @@ func (p *Plugin) getCookieDomain() string {
 		return ""
 	}
 	return u.Hostname()
+}
+
+// getCookiePath mirrors core's utils.GetSubpathFromConfig: returns the cleaned URL path from SiteURL (e.g. "/mattermost"), or "/" if no subpath is configured.
+func getCookiePath(siteURL string) string {
+	if siteURL == "" {
+		return "/"
+	}
+	u, err := url.Parse(siteURL)
+	if err != nil || u.Path == "" {
+		return "/"
+	}
+	subpath := path.Clean(u.Path)
+	if subpath == "" || subpath == "." || subpath == "/" {
+		return "/"
+	}
+	if !strings.HasPrefix(subpath, "/") {
+		subpath = "/" + subpath
+	}
+	return subpath
 }
 
 // renderError renders a simple error page to the user.
