@@ -488,13 +488,16 @@ func TestSetSessionCookie(t *testing.T) {
 		newPlugin(true).setSessionCookie(rec, req, session, "https://chat.example.com")
 
 		set := map[string]*http.Cookie{}
-		dropped := map[string]bool{}
+		dropped := map[string]*http.Cookie{}
 		for _, c := range rec.Result().Cookies() {
 			if c.MaxAge < 0 {
 				if c.Domain != "" {
 					t.Errorf("%s: deletion must target the host-only cookie, got Domain=%q", c.Name, c.Domain)
 				}
-				dropped[c.Name] = true
+				if set[c.Name] != nil {
+					t.Errorf("%s: deletion must precede setting the new cookie", c.Name)
+				}
+				dropped[c.Name] = c
 				continue
 			}
 			set[c.Name] = c
@@ -521,12 +524,18 @@ func TestSetSessionCookie(t *testing.T) {
 			if !c.Secure {
 				t.Errorf("%s should be Secure on https", name)
 			}
-			if !dropped[name] {
+			if dropped[name] == nil {
 				t.Errorf("%s: host-only copy not dropped", name)
 			}
 		}
 		if !set[model.SessionCookieToken].HttpOnly {
 			t.Error("MMAUTHTOKEN must be HttpOnly")
+		}
+		if !dropped[model.SessionCookieToken].HttpOnly {
+			t.Error("MMAUTHTOKEN deletion cookie must preserve HttpOnly")
+		}
+		if dropped[model.SessionCookieToken].SameSite != http.SameSiteLaxMode {
+			t.Error("MMAUTHTOKEN deletion cookie must preserve SameSite")
 		}
 		if set[model.SessionCookieCsrf].HttpOnly {
 			t.Error("MMCSRF must be readable by the webapp")

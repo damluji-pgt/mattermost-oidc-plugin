@@ -829,12 +829,11 @@ func (p *Plugin) setSessionCookie(w http.ResponseWriter, r *http.Request, sessio
 		{Name: model.SessionCookieCsrf, Value: session.GetCSRF(), Path: "/", Domain: domain, MaxAge: maxAge, Expires: expires, Secure: secure, SameSite: http.SameSiteLaxMode},
 	}
 	for _, c := range cookies {
-		http.SetCookie(w, c)
-
 		// Drop any host-only copy left by an earlier login through this plugin, so the browser keeps a single cookie per name.
 		if domain != "" {
-			http.SetCookie(w, &http.Cookie{Name: c.Name, Value: "", Path: "/", MaxAge: -1, Secure: secure})
+			http.SetCookie(w, &http.Cookie{Name: c.Name, Value: "", Path: "/", MaxAge: -1, Secure: c.Secure, HttpOnly: c.HttpOnly, SameSite: c.SameSite})
 		}
+		http.SetCookie(w, c)
 	}
 }
 
