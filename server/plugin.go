@@ -30,6 +30,9 @@ const (
 // kvEncryptionKey is the KV store key under which the HMAC signing key is persisted.
 const kvEncryptionKey = "_plugin_encryption_key"
 
+// discoveryRetryInterval limits how often unauthenticated login requests can make the plugin contact the issuer.
+const discoveryRetryInterval = 10 * time.Second
+
 // Plugin implements the Mattermost plugin interface.
 type Plugin struct {
 	plugin.MattermostPlugin
@@ -52,6 +55,12 @@ type Plugin struct {
 
 	// oidcVerifier is the ID token verifier.
 	oidcVerifier *oidc.IDTokenVerifier
+
+	// retryLock allows one login-time discovery retry at a time.
+	retryLock sync.Mutex
+
+	// lastDiscoveryRetry is when a login request last retried discovery, guarded by retryLock.
+	lastDiscoveryRetry time.Time
 
 	// router handles HTTP requests for this plugin.
 	router *mux.Router
@@ -143,6 +152,9 @@ func (p *Plugin) setConfiguration(configuration *Configuration) {
 // initOIDCProvider discovers and initializes the OIDC provider, OAuth2 config, and verifier.
 func (p *Plugin) initOIDCProvider() error {
 	config := p.getConfiguration()
+	if err := config.IsValid(); err != nil {
+		return err
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -180,10 +192,17 @@ func (p *Plugin) initOIDCProvider() error {
 	})
 
 	p.configurationLock.Lock()
-	p.oidcProvider = provider
-	p.oauth2Config = oauthConfig
-	p.oidcVerifier = verifier
+	// A configuration saved during discovery gets its own OnConfigurationChange, so this result is stale.
+	stale := p.configuration == nil || *p.configuration != *config
+	if !stale {
+		p.oidcProvider = provider
+		p.oauth2Config = oauthConfig
+		p.oidcVerifier = verifier
+	}
 	p.configurationLock.Unlock()
+	if stale {
+		return fmt.Errorf("configuration changed during discovery")
+	}
 
 	p.API.LogInfo("OIDC provider initialized successfully",
 		"issuer_url", config.IssuerURL,
@@ -191,6 +210,21 @@ func (p *Plugin) initOIDCProvider() error {
 		"pkce", "S256",
 	)
 	return nil
+}
+
+// retryOIDCProvider re-runs failed discovery for a login request, at most once per discoveryRetryInterval.
+func (p *Plugin) retryOIDCProvider() {
+	if !p.retryLock.TryLock() {
+		return
+	}
+	defer p.retryLock.Unlock()
+	if p.getOAuthConfig() != nil || time.Since(p.lastDiscoveryRetry) < discoveryRetryInterval {
+		return
+	}
+	p.lastDiscoveryRetry = time.Now()
+	if err := p.initOIDCProvider(); err != nil {
+		p.API.LogWarn("Failed to initialize OIDC provider on login", "error", err.Error())
+	}
 }
 
 // ServeHTTP routes incoming HTTP requests to the plugin's router.

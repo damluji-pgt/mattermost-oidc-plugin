@@ -98,6 +98,7 @@ func (p *Plugin) handleOAuth2Connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	p.retryOIDCProvider()
 	oauthConfig := p.getOAuthConfig()
 	if oauthConfig == nil {
 		http.Error(w, "OIDC provider not initialized. Check plugin configuration.", http.StatusInternalServerError)

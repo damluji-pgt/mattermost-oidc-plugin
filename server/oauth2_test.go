@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -620,5 +621,116 @@ func TestGetCookiePath(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("getCookiePath(%q) = %q, want %q", tc.siteURL, got, tc.want)
 		}
+	}
+}
+
+// quietAPI drops log calls, which plugintest.API would reject as unexpected.
+type quietAPI struct{ *plugintest.API }
+
+func (quietAPI) LogInfo(string, ...any)  {}
+func (quietAPI) LogWarn(string, ...any)  {}
+func (quietAPI) LogError(string, ...any) {}
+
+// newDiscoveryTestPlugin returns a plugin whose issuer answers discovery only while up is true; onRequest may be nil.
+func newDiscoveryTestPlugin(t *testing.T, up *atomic.Bool, hits *atomic.Int32, onRequest func()) (*Plugin, string) {
+	t.Helper()
+	var issuer string
+	idp := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if onRequest != nil {
+			onRequest()
+		}
+		if !up.Load() {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"issuer":                 issuer,
+			"authorization_endpoint": issuer + "/auth",
+			"token_endpoint":         issuer + "/token",
+			"jwks_uri":               issuer + "/certs",
+		})
+	}))
+	t.Cleanup(idp.Close)
+	issuer = idp.URL
+	// go-oidc falls back to http.DefaultClient, which must trust the test issuer's certificate.
+	defaultClient := http.DefaultClient
+	http.DefaultClient = idp.Client()
+	t.Cleanup(func() { http.DefaultClient = defaultClient })
+
+	api := &plugintest.API{}
+	api.On("GetConfig").Return(&model.Config{ServiceSettings: model.ServiceSettings{SiteURL: model.NewPointer("https://mm.example.com")}})
+	api.On("KVSetWithExpiry", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	p := &Plugin{encryptionKey: "test-key"}
+	p.SetAPI(quietAPI{api})
+	p.setConfiguration(&Configuration{Enable: true, IssuerURL: issuer, ClientID: "mattermost", ClientSecret: "secret", Scopes: "openid"})
+	return p, issuer
+}
+
+func TestConnectRetriesFailedDiscovery(t *testing.T) {
+	var up atomic.Bool
+	var hits atomic.Int32
+	p, issuer := newDiscoveryTestPlugin(t, &up, &hits, nil)
+	if err := p.initOIDCProvider(); err == nil {
+		t.Fatal("discovery succeeded while the issuer was down")
+	}
+
+	up.Store(true)
+	rec := httptest.NewRecorder()
+	p.handleOAuth2Connect(rec, httptest.NewRequest(http.MethodGet, "/oauth2/connect", nil))
+
+	if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), issuer+"/auth?") {
+		t.Fatalf("got %d to %q, want a redirect to the issuer", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+func TestConnectRetriesDiscoveryAtMostOncePerInterval(t *testing.T) {
+	var up atomic.Bool
+	var hits atomic.Int32
+	p, _ := newDiscoveryTestPlugin(t, &up, &hits, nil)
+	_ = p.initOIDCProvider()
+
+	for range 3 {
+		rec := httptest.NewRecorder()
+		p.handleOAuth2Connect(rec, httptest.NewRequest(http.MethodGet, "/oauth2/connect", nil))
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("got %d while the issuer is down, want 500", rec.Code)
+		}
+	}
+	if got := hits.Load(); got != 2 {
+		t.Errorf("issuer hit %d times, want 2: one failed discovery and one retry", got)
+	}
+}
+
+func TestConnectDoesNotRetryInvalidConfiguration(t *testing.T) {
+	var up atomic.Bool
+	var hits atomic.Int32
+	p, _ := newDiscoveryTestPlugin(t, &up, &hits, nil)
+	up.Store(true)
+	config := p.getConfiguration()
+	config.ClientSecret = ""
+	p.setConfiguration(config)
+
+	rec := httptest.NewRecorder()
+	p.handleOAuth2Connect(rec, httptest.NewRequest(http.MethodGet, "/oauth2/connect", nil))
+
+	if rec.Code != http.StatusInternalServerError || hits.Load() != 0 {
+		t.Fatalf("got %d after %d discovery calls, want 500 and none", rec.Code, hits.Load())
+	}
+}
+
+func TestDiscoveryDiscardedWhenConfigurationChanges(t *testing.T) {
+	var up atomic.Bool
+	var hits atomic.Int32
+	var p *Plugin
+	p, _ = newDiscoveryTestPlugin(t, &up, &hits, func() {
+		config := p.getConfiguration()
+		config.ClientID = "rotated"
+		p.setConfiguration(config)
+	})
+	up.Store(true)
+
+	if err := p.initOIDCProvider(); err == nil || p.getOAuthConfig() != nil {
+		t.Fatalf("got err=%v, provider set=%t; want the stale discovery discarded", err, p.getOAuthConfig() != nil)
 	}
 }
